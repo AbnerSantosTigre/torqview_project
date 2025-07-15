@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+
+{% block title %}Login{% endblock %}
+
+{% block content %}
+<h1>Login TorqView</h1>
+<form action="{{ url_for('security.login') }}" method="POST">
+    {{ login_user_form.hidden_tag() }}
+    <div>
+        {{ login_user_form.email.label }}<br>
+        {{ login_user_form.email(size=32) }}
+    </div>
+    <div>
+        {{ login_user_form.password.label }}<br>
+        {{ login_user_form.password(size=32) }}
+    </div>
+    <div>
+        {{ login_user_form.remember }} {{ login_user_form.remember.label }}
+    </div>
+    <div>
+        {{ login_user_form.submit() }}
+    </div>
+</form>
+{% endblock %}
