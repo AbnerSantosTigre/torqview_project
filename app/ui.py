@@ -3,7 +3,7 @@ from PyQt5.QtWidgets import (
     QComboBox, QLCDNumber, QFrame, QFileDialog, QStackedLayout,
     QTableWidget, QTableWidgetItem, QHeaderView, QMessageBox,
     QSpinBox, QDialog, QGroupBox, QRadioButton, QTabWidget, QLineEdit, QGraphicsOpacityEffect,
-    QDateTimeEdit, QSplitter
+    QDateTimeEdit, QSplitter, QCheckBox, QFormLayout, QDoubleSpinBox, QApplication
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QObject
 from PyQt5.QtGui import QPixmap, QFont
@@ -22,18 +22,19 @@ from .settings import *
 from .database import init_db, salvar_leitura, buscar_leituras, buscar_leituras_por_data
 
 class Comunicador(QObject):
-    atualizar_valor = pyqtSignal(float)
+    atualizar_canais = pyqtSignal(list)  # Sinal para atualizar múltiplos canais
 
 class TorqView(QWidget):
     def __init__(self):
         super().__init__()
+        self.inicializar_recursos()
         self.setWindowTitle("TorqView - Leitor de Torquímetro")
         self.setGeometry(100, 100, 1200, 800)
         self.setFont(QFont("Segoe UI", 12))
 
         self.logger = configurar_logs()
         self.comunicador = Comunicador()
-        self.comunicador.atualizar_valor.connect(self.atualizar_valor)
+        self.comunicador.atualizar_canais.connect(self.atualizar_canais)
 
         self.conexao_serial_ativa = False
         self.thread_rodando = False
@@ -43,6 +44,9 @@ class TorqView(QWidget):
         self.dados_eixo_y = []
         self.limite_registros = 10
         self.modo_admin = False
+        self.dados_canais = {1: [], 2: [], 3: [], 4: []}
+        self.picos_canais = {1: None, 2: None, 3: None, 4: None}
+        self.limites = {1: 1400, 2: 140, 3: 14, 4: 4}
 
         self.alerta_sonoro = configurar_alerta_sonoro()
         self.serial_controller = None
@@ -56,6 +60,16 @@ class TorqView(QWidget):
 
         self.picos_registrados = []  # Lista para armazenar os picos (valor, porta, sentido, tempo)
         self.limite_picos = 25  # Limite de registros na tabela
+
+        self.current_key = "Não lida"  # Armazena a key atual
+        self.new_key = ""  # Armazena a nova key para gravação
+
+        self._timers = []  # Para armazenar referências a timers
+        self._shutting_down = False  # Flag de encerramento
+
+    def __del__(self):
+        if not self._shutting_down:
+            self.close()
 
     def iniciar_interface(self):
         self.pilha_telas = QStackedLayout()
@@ -100,12 +114,39 @@ class TorqView(QWidget):
         titulo.setStyleSheet("font-size: 32px; font-weight: bold; color: #d32f2f;")
 
         logo = QLabel()
-        if QPixmap("logo.png").isNull():
-            print("AVISO: logo.png não encontrado ou inválido!")
-        else:
-            logo.setPixmap(QPixmap("logo.png").scaled(100, 100, Qt.KeepAspectRatio, Qt.SmoothTransformation))
-        logo.setGraphicsEffect(QGraphicsOpacityEffect())
-        logo.graphicsEffect().setOpacity(0.2)
+        try:
+            # Tenta vários caminhos possíveis
+            logo_paths = [
+                "resources/images/logo.png",
+                "logo.png",
+                os.path.join(os.path.dirname(__file__), "..", "resources", "images", "logo.png")
+            ]
+            
+            logo_encontrado = False
+            for path in logo_paths:
+                if os.path.exists(path) and not QPixmap(path).isNull():
+                    logo.setPixmap(QPixmap(path).scaled(100, 100, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+                    logo_encontrado = True
+                    break
+            
+            if not logo_encontrado:
+                # Cria um placeholder gráfico profissional
+                logo.setText("TORQVIEW")
+                logo.setStyleSheet("""
+                    font-size: 16px;
+                    font-weight: bold;
+                    color: white;
+                    background-color: #d32f2f;
+                    border-radius: 10px;
+                    padding: 15px;
+                    qproperty-alignment: AlignCenter;
+                """)
+                logo.setFixedSize(120, 100)
+        except Exception as e:
+            print(f"AVISO: Erro ao carregar logo: {str(e)}")
+            # Fallback extremo
+            logo.setText("LOGO")
+            logo.setMinimumSize(100, 100)
 
         cabecalho = QHBoxLayout()
         cabecalho.addWidget(titulo)
@@ -129,6 +170,147 @@ class TorqView(QWidget):
         botao_filtrar = QPushButton("Filtrar Leituras")
         botao_filtrar.clicked.connect(lambda: self.pilha_telas.setCurrentIndex(2))
         layout.addWidget(botao_filtrar)
+
+    def configurar_alerta_sonoro():
+        try:
+            from PyQt5.QtMultimedia import QSoundEffect
+            from PyQt5.QtCore import QUrl
+            import os
+            
+            # Caminhos possíveis para o arquivo de som
+            possible_paths = [
+                os.path.join("resources", "sounds", "alert.wav"),
+                os.path.join("sounds", "alert.wav"),
+                "alert.wav",
+                os.path.join(os.path.dirname(__file__), "..", "resources", "sounds", "alert.wav")
+            ]
+            
+            effect = QSoundEffect()
+            
+            for path in possible_paths:
+                if os.path.exists(path):
+                    absolute_path = os.path.abspath(path)
+                    print(f"Carregando som de alerta de: {absolute_path}")
+                    effect.setSource(QUrl.fromLocalFile(absolute_path))
+                    effect.setVolume(0.5)  # Volume moderado
+                    return effect
+            
+            print("AVISO: Arquivo alert.wav não encontrado em:")
+            print("\n".join([os.path.abspath(p) for p in possible_paths]))
+            return None
+        
+        except Exception as e:
+            print(f"AVISO: Erro ao configurar alerta sonoro - {str(e)}")
+            return None
+        
+    def inicializar_recursos(self):
+        """Garante que todos os recursos necessários existam"""
+        import os
+        from urllib.request import urlretrieve
+        
+        # Criar estrutura de diretórios
+        os.makedirs("resources/images", exist_ok=True)
+        os.makedirs("resources/sounds", exist_ok=True)
+        
+        # URLs de recursos padrão
+        recursos = {
+            "logo.png": "https://via.placeholder.com/200x100.png?text=TORQVIEW",
+            "alert.wav": "https://www.soundjay.com/buttons/sounds/button-09.wav"
+        }
+        
+        # Verificar e baixar recursos faltantes
+        for arquivo, url in recursos.items():
+            path = os.path.join("resources", "images" if arquivo.endswith(".png") else "sounds", arquivo)
+            if not os.path.exists(path):
+                try:
+                    print(f"Baixando recurso padrão: {arquivo}")
+                    urlretrieve(url, path)
+                except Exception as e:
+                    print(f"AVISO: Não foi possível baixar {arquivo}: {str(e)}")
+
+    def criar_aba_key(self):
+        aba = QWidget()
+        layout = QVBoxLayout()
+
+        # Grupo de leitrua da Key
+        grupo_leitura = QGroupBox("Identificação do Dispositivo")
+        layout_leitura = QFormLayout()
+
+        self.label_key_atual = QLabel("Key Atual: Não lida")
+        self.line_edit_nova_key = QLineEdit()
+        self.line_edit_nova_key.setPlaceholderText("Insira a nova Key")
+
+        btn_ler_key = QPushButton("Ler Key")
+        btn_ler_key.clicked.connect(self.ler_key_dispositivo)
+
+        btn_gravar_key = QPushButton("Gravar Noa Key")
+        btn_gravar_key.clicked.connect(self.gravar_nova_key)
+
+        layout_leitura.addRow(self.label_key_atual)
+        layout_leitura.addRow("NOva Key:", self.line_edit_nova_key)
+        layout_leitura.addRow(btn_ler_key)
+        layout_leitura.addRow(btn_gravar_key)
+        grupo_leitura.setLayout(layout_leitura)
+
+        # Grupo de informações
+        grupo_info = QGroupBox("Informações da Key")
+        layout_info = QVBoxLayout()
+        self.label_info_key = QLabel(
+            "Formaro esperado: XXXX_XXXX_XXXX_XXXX\n"
+            "Exemplo: 38F6_0156_3053_13C4"
+        )
+        self.label_info_key.setWordWrap(True)
+        layout_info.addWidget(self.label_info_key)
+        grupo_info.setLayout(layout_info)
+
+        layout.addWidget(grupo_leitura)
+        layout.addWidget(grupo_info)
+        aba.setLayout(layout)
+
+        return aba
+    
+    def ler_key_dispositivo(self):
+        """Simula a leitura da key do dispositivo"""
+        try:
+            # Simulação - na prática, você faria a leitura serial aqui
+            if self.conexao_serial_ativa and hasattr(self, 'serial_controller'):
+                # Se estiver usando comunicação serial real:
+                # self.current_key = self.serial_controller.ler_key()
+                
+                # Modo simulado:
+                self.current_key = "38F6_0156_3053_13C4"  # Exemplo fixo
+                self.label_key_atual.setText(f"Key Atual: {self.current_key}")
+                QMessageBox.information(self, "Sucesso", "Key lida com sucesso!")
+            else:
+                QMessageBox.warning(self, "Aviso", "Conecte-se ao dispositivo primeiro")
+        except Exception as e:
+            QMessageBox.critical(self, "Erro", f"Falha ao ler key:\n{str(e)}")
+
+    def gravar_nova_key(self):
+        """Grava uma nova key no dispositivo"""
+        nova_key = self.line_edit_nova_key.text().strip()
+        
+        if not nova_key:
+            QMessageBox.warning(self, "Aviso", "Insira uma nova key antes de gravar")
+            return
+        
+        try:
+            # Validação básica do formato (ajuste conforme seu padrão)
+            if len(nova_key) != 19 or nova_key.count('_') != 3:
+                raise ValueError("Formato inválido. Use XXXX_XXXX_XXXX_XXXX")
+            
+            if self.conexao_serial_ativa and hasattr(self, 'serial_controller'):
+                # Se estiver usando comunicação serial real:
+                # self.serial_controller.gravar_key(nova_key)
+                
+                # Modo simulado:
+                self.current_key = nova_key
+                self.label_key_atual.setText(f"Key Atual: {self.current_key}")
+                QMessageBox.information(self, "Sucesso", "Nova key gravada com sucesso!")
+            else:
+                QMessageBox.warning(self, "Aviso", "Conecte-se ao dispositivo primeiro")
+        except Exception as e:
+            QMessageBox.critical(self, "Erro", f"Falha ao gravar key:\n{str(e)}")
 
     def criar_tela_monitoramento(self):
         pagina = QWidget()
@@ -209,6 +391,40 @@ class TorqView(QWidget):
         layout_principal.addWidget(self.tabela_picos)
         layout_principal.addWidget(container_controles)  # Mantém os controles abaixo
 
+        layout_canais = QHBoxLayout()
+        self.displays = {
+            1: QLCDNumber(),
+            2: QLCDNumber(),
+            3: QLCDNumber(),
+            4: QLCDNumber()
+        }
+        for canal, display in self.displays.items():
+            display.setDigitCount(6)
+            display.display(0.00)
+            layout_canais.addWidget(QLabel(f"Canal {canal}"))
+            layout_canais.addWidget(display)
+
+        layout_controles.addLayout(layout_canais)
+
+         # Crie um QTabWidget para organizar as abas
+        tabs = QTabWidget()
+        
+        # Aba de monitoramento principal
+        tab_monitor = QWidget()
+        layout_monitor = QVBoxLayout()
+        # ... (adicione os widgets de monitoramento aqui)
+        tab_monitor.setLayout(layout_monitor)
+        
+        # Aba de Key
+        tab_key = self.criar_aba_key()
+        
+        # Adicione as abas
+        tabs.addTab(tab_monitor, "Monitoramento")
+        tabs.addTab(tab_key, "Identificação")
+        
+        # Adicione o QTabWidget ao layout principal
+        layout_principal.addWidget(tabs)
+
     def conectar_serial(self):
         porta = self.seletor_porta.currentText()
         if porta == "Simulado":
@@ -236,54 +452,70 @@ class TorqView(QWidget):
         self.rotulo_status.setText("Status: Desconectado")
         self.conexao_serial_ativa = False
 
-    def atualizar_valor(self, valor):
-        # Atualiza o display LCD
-        self.display_lcd.display(valor)
-        
-        # Salva a leitura no banco de dados
-        salvar_leitura(valor, self.seletor_porta.currentText())
-        
-        # Atualiza os dados do gráfico
-        self.dados_eixo_y.append(valor)
-        self.dados_eixo_x.append(len(self.dados_eixo_y) * self.intervalo_leitura)
-        
-        # --- TRAVA O EIXO X PARA MOSTRAR TODAS AS LEITURAS ---
-        # Define o limite mínimo e máximo do eixo X
-        x_min = 0  # Começa em 0
-        x_max = len(self.dados_eixo_y) * self.intervalo_leitura  # Até a última leitura
-        
-        # Atualiza a curva do gráfico com todos os dados (não apenas os últimos 100 pontos)
-        self.curva.setData(self.dados_eixo_x, self.dados_eixo_y)
-        
-        # Trava o eixo X para mostrar todo o intervalo
-        self.grafico.setXRange(x_min, x_max, padding=0.1)  # padding=0.1 adiciona 10% de margem
-        
-        # Auto-ajuste do eixo Y (opcional)
-        if len(self.dados_eixo_y) > 0:
-            margem = 0.1  # 10% de margem
-            valor_min = min(self.dados_eixo_y) * (1 - margem)
-            valor_max = max(self.dados_eixo_y) * (1 + margem)
-            self.grafico.setYRange(valor_min, valor_max)
-        
-        # Verifica se deve disparar alerta (opcional)
-        if hasattr(self, 'limite_alerta') and valor > self.limite_alerta:
-            if self.alerta_sonoro:
-                self.alerta_sonoro.play()
+    def atualizar_canais(self, valores):
+        """Atualiza os valores dos 4 canais."""
+        for canal, valor in enumerate(valores, start=1):
+            if canal in self.displays:
+                self.displays[canal].display(valor)
+            
+            # Salva no banco de dados
+            salvar_leitura(valor, f"Canal {canal}")
+            
+            # Atualiza dados do gráfico (usando Canal 1 como principal)
+            if canal == 1:
+                self.dados_eixo_y.append(valor)
+                self.dados_eixo_x.append(len(self.dados_eixo_y) * self.intervalo_leitura)
+                self.curva.setData(self.dados_eixo_x, self.dados_eixo_y)
+                
+                # Auto-ajuste dos eixos
+                if len(self.dados_eixo_y) > 0:
+                    self.grafico.setXRange(0, len(self.dados_eixo_y) * self.intervalo_leitura, padding=0.1)
+                    margem = 0.1
+                    valor_min = min(self.dados_eixo_y) * (1 - margem)
+                    valor_max = max(self.dados_eixo_y) * (1 + margem)
+                    self.grafico.setYRange(valor_min, valor_max)
 
-        # Registra picos (apenas valores maiores que o último pico registrado)
-        if not self.picos_registrados or valor > self.picos_registrados[-1][0]:
-            tempo_atual = datetime.now().strftime("%M:%S")  # Formato minuto:segundo
-            sentido = "Horário" if valor >= 0 else "Anti-horário"  # Define o sentido
-            novo_pico = (valor, self.seletor_porta.currentText(), sentido, tempo_atual)
-            
-            self.picos_registrados.append(novo_pico)
-            self.picos_registrados.sort(reverse=True, key=lambda x: x[0])  # Ordena por pico (Nm)
-            
-            # Mantém apenas os 25 maiores picos
-            if len(self.picos_registrados) > self.limite_picos:
-                self.picos_registrados = self.picos_registrados[:self.limite_picos]
-            
-            self.atualizar_tabela_picos()  # Atualiza a tabela
+            # Detecção de picos por canal
+            if self.picos_canais[canal] is None or valor > self.picos_canais[canal]:
+                self.picos_canais[canal] = valor
+                tempo_atual = datetime.now().strftime("%M:%S")
+                sentido = "Horário" if valor >= 0 else "Anti-horário"
+                novo_pico = (valor, f"Canal {canal}", sentido, tempo_atual)
+                
+                self.picos_registrados.append(novo_pico)
+                self.picos_registrados.sort(reverse=True, key=lambda x: x[0])
+                
+                if len(self.picos_registrados) > self.limite_picos:
+                    self.picos_registrados = self.picos_registrados[:self.limite_picos]
+                
+                self.atualizar_tabela_picos()
+
+    def criar_aba_controles(self):
+        aba = QWidget()
+        layout = QVBoxLayout()
+
+        # Seção Pico
+        grupo_pico = QGroupBox("Configuração de Picos")
+        layout_pico = QVBoxLayout()
+        self.checkbox_pico = QCheckBox("Habilitar Detecção de Picos")
+        self.label_ultimo_pico = QLabel("Último Pico: -- Nm")
+        layout_pico.addWidget(self.checkbox_pico)
+        layout_pico.addWidget(self.label_ultimo_pico)
+        grupo_pico.setLayout(layout_pico)
+
+        # Seção Key
+        grupo_key = QGroupBox("Identificação de Dispositivo")
+        layout_key = QVBoxLayout()
+        self.label_key = QLabel("Key: Não lida")
+        self.botao_ler_key = QPushButton("Ler Key")
+        layout_key.addWidget(self.label_key)
+        layout_key.addWidget(self.botao_ler_key)
+        grupo_key.setLayout(layout_key)
+
+        layout.addWidget(grupo_pico)
+        layout.addWidget(grupo_key)
+        aba.setLayout(layout)
+        return aba
 
     def salvar_pdf(self):
         if not buscar_leituras():
@@ -391,29 +623,79 @@ class TorqView(QWidget):
         self.pilha_telas.addWidget(pagina)  # Adiciona à pilha de telas
     
     def abrir_configuracoes_gerais(self):
-        dialog = QDialog(self)
-        dialog.setWindowTitle("Configura\u00e7\u00f5es")
-        dialog.setFixedSize(400, 300)
+        try:
+            dialog = QDialog(self)
+            dialog.setWindowTitle("Configurações Avançadas")
+            dialog.setFixedSize(600, 400)
+            
+            # Layout principal
+            main_layout = QVBoxLayout(dialog)
+            
+            # Abas
+            tabs = QTabWidget()
+            
+            # Aba Conexão
+            tab_conexao = QWidget()
+            layout_conexao = QFormLayout(tab_conexao)
+            
+            self.combo_baud = QComboBox()
+            self.combo_baud.addItems(["9600", "19200", "38400", "57600", "115200"])
+            layout_conexao.addRow("Baud Rate:", self.combo_baud)
+            
+            # Aba Canais
+            tab_canais = QWidget()
+            layout_canais = QFormLayout(tab_canais)
+            
+            self.spinboxes_limites = {}
+            for canal in range(1, 5):
+                spinbox = QDoubleSpinBox()
+                spinbox.setRange(0, 2000)
+                spinbox.setValue(self.limites.get(canal, 0))
+                self.spinboxes_limites[canal] = spinbox
+                layout_canais.addRow(f"Limite Canal {canal} (Nm):", spinbox)
+            
+            tabs.addTab(tab_conexao, "Conexão")
+            tabs.addTab(tab_canais, "Canais")
+            main_layout.addWidget(tabs)
+            
+            # Botões de ação
+            btn_layout = QHBoxLayout()
+            btn_salvar = QPushButton("Salvar")
+            btn_cancelar = QPushButton("Cancelar")
+            
+            # Conexão segura
+            if hasattr(self, 'salvar_configuracoes'):
+                btn_salvar.clicked.connect(lambda: self.salvar_configuracoes(dialog))
+            else:
+                btn_salvar.clicked.connect(dialog.accept)
+            
+            btn_cancelar.clicked.connect(dialog.reject)
+            btn_layout.addWidget(btn_salvar)
+            btn_layout.addWidget(btn_cancelar)
+            main_layout.addLayout(btn_layout)
+            
+            dialog.exec_()
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Erro", f"Falha ao abrir configurações:\n{str(e)}")
 
-        tabs = QTabWidget()
-
-        aba_admin = QWidget()
-        layout_admin = QVBoxLayout()
-        self.campo_senha = QLineEdit()
-        self.campo_senha.setEchoMode(QLineEdit.Password)
-        botao_login = QPushButton("Acessar como Admin")
-        botao_login.clicked.connect(self.verificar_admin)
-        layout_admin.addWidget(QLabel("Senha Admin:"))
-        layout_admin.addWidget(self.campo_senha)
-        layout_admin.addWidget(botao_login)
-        aba_admin.setLayout(layout_admin)
-
-        tabs.addTab(aba_admin, "Admin")
-
-        layout_dialog = QVBoxLayout()
-        layout_dialog.addWidget(tabs)
-        dialog.setLayout(layout_dialog)
-        dialog.exec_()
+    def salvar_configuracoes(self, dialog):
+        """Salva as configurações alteradas na dialog"""
+        try:
+            # Salvar baud rate
+            novo_baud = int(self.combo_baud.currentText())
+            if hasattr(self, 'serial_controller') and self.serial_controller:
+                self.serial_controller.baudrate = novo_baud
+            
+            # Salvar limites dos canais
+            for canal, spinbox in self.spinboxes_limites.items():
+                self.limites[canal] = spinbox.value()
+            
+            QMessageBox.information(self, "Sucesso", "Configurações salvas com sucesso!")
+            dialog.accept()
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Erro", f"Falha ao salvar configurações:\n{str(e)}")
 
     def verificar_admin(self):
         if verificar_admin(self.campo_senha.text()):
@@ -444,13 +726,54 @@ class TorqView(QWidget):
         """)
         self.tabela_picos.setObjectName("tabela_picos")  # Aplica o estilo
 
+    def verificar_recursos(self):
+        recursos_ok = True
+        required = [
+            "resources/images/logo.png",
+            "resources/sounds/alert.wav"
+        ]
+        
+        for recurso in required:
+            if not os.path.exists(recurso):
+                print(f"AVISO CRÍTICO: Recurso faltando - {recurso}")
+                recursos_ok = False
+        
+        if not recursos_ok:
+            msg = QMessageBox()
+            msg.setIcon(QMessageBox.Warning)
+            msg.setText("Alguns recursos estão faltando!")
+            msg.setInformativeText("O aplicativo pode não funcionar completamente.")
+            msg.exec_()
+        
+        return recursos_ok
+
     def closeEvent(self, event):
+        # Parar todas as threads primeiro
         self.thread_rodando = False
-        if hasattr(self, 'serial_controller')and self.serial_controller is not None:
+        
+        # Desconectar serial de forma segura
+        if hasattr(self, 'serial_controller') and self.serial_controller is not None:
             try:
-                self.self_controller.desconcetar()
+                if hasattr(self.serial_controller, 'desconectar'):
+                    self.serial_controller.desconectar()
+                elif hasattr(self.serial_controller, 'close'):
+                    self.serial_controller.close()
             except Exception as e:
-                print(f"AVISO: Falha ao desconectar serial: {e}")
-        if hasattr(self, 'simulador')and self.simulador is not None:
-            self.simulador.parar()
+                print(f"AVISO: Falha ao desconectar serial - {str(e)}")
+        
+        # Parar simulador
+        if hasattr(self, 'simulador') and self.simulador is not None:
+            try:
+                self.simulador.parar()
+            except Exception as e:
+                print(f"AVISO: Falha ao parar simulador - {str(e)}")
+        
+        # Encerrar todos os timers
+        for timer in getattr(self, '_timers', []):
+            timer.stop()
+        
+        # Forçar processamento de eventos pendentes
+        QApplication.processEvents()
+        
+        # Aceitar o evento de fechamento
         event.accept()

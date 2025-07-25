@@ -1,22 +1,28 @@
 import sys
-from PyQt5.QtWidgets import QApplication, QMessageBox
-from PyQt5.QtGui import QFont
+from PyQt5.QtWidgets import QApplication
+
+from app.ui import TorqView
 
 def main():
+    
+    app = QApplication(sys.argv)
+    
     try:
-        app = QApplication(sys.argv)
-        app.setStyle('Fusion')
+        window = TorqView()
+        window.show()
         
-        fonte = QFont()
-        fonte.setPointSize(12)
-        app.setFont(fonte)
+        # Conexão para garantir saída limpa
+        app.aboutToQuit.connect(window.close)
         
-        from app.ui import TorqView
-        janela = TorqView()
-        janela.show()
-        sys.exit(app.exec_())
+        ret = app.exec_()
+        
+        # Limpeza pós-execution
+        del window
+        QApplication.processEvents()
+        
+        sys.exit(ret)
     except Exception as e:
-        QMessageBox.critical(None, "Erro", f"Não foi possível iniciar o aplicativo:\n{str(e)}")
+        print(f"ERRO CRÍTICO: {str(e)}")
         sys.exit(1)
 
 if __name__ == "__main__":
