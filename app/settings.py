@@ -19,16 +19,16 @@ for directory in [RESOURCES_DIR, DB_DIR, LOGS_DIR]:
     directory.mkdir(exist_ok=True)
 
 # Paths absolutos
-SOUND_PATH = str(RESOURCES_DIR / "sounds" / "alert.wav")
+SOUND_PATH = "resources/sounds/alert.wav"
 LOG_FILE = LOGS_DIR / "torqview.log"
-PDF_DIR = BASE_DIR.parent / "PDF"
+PDF_DIR = BASE_DIR / "PDF"
 DB_PATH = DB_DIR / "torqview.db"
 
 # Configurações de segurança
 def get_admin_hash():
     """Gera hash seguro da senha admin com salt."""
-    salt = os.getenv("TORQVIEW_SALT", "default_salt_altere_em_producao")  # 👈 Salt no .env
-    raw_pass = os.getenv("TORQVIEW_ADMIN_PASS")  # 👈 Obrigatório no .env
+    salt = os.getenv("TORQVIEW_SALT", "default_salt_altere_em_producao")
+    raw_pass = os.getenv("TORQVIEW_ADMIN_PASS")
     
     if not raw_pass:
         raise ValueError("Variável TORQVIEW_ADMIN_PASS não configurada no .env!")

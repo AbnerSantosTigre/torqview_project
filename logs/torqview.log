@@ -71,3 +71,18 @@
 25/07/2025 00:07:12 - INFO - Aplicativo iniciado
 25/07/2025 00:11:50 - INFO - Aplicativo iniciado
 25/07/2025 00:16:39 - INFO - Aplicativo iniciado
+25/07/2025 00:36:10 - INFO - Aplicativo iniciado
+25/07/2025 14:45:30 - INFO - Aplicativo iniciado
+25/07/2025 14:46:38 - INFO - Aplicativo iniciado
+28/07/2025 15:12:10 - INFO - Aplicativo iniciado
+28/07/2025 15:19:22 - INFO - Aplicativo iniciado
+29/07/2025 21:05:41 - INFO - Aplicativo iniciado
+31/07/2025 13:47:18 - INFO - Aplicativo iniciado
+31/07/2025 13:47:39 - ERROR - Erro na conexão: ModbusSerialClient.__init__() got an unexpected keyword argument 'method'
+31/07/2025 15:13:06 - INFO - Aplicativo iniciado
+31/07/2025 15:13:40 - ERROR - Erro na conexão: ModbusSerialClient.__init__() got an unexpected keyword argument 'strict'
+31/07/2025 15:16:03 - ERROR - Erro na conexão: ModbusSerialClient.__init__() got an unexpected keyword argument 'strict'
+31/07/2025 15:16:10 - INFO - Aplicativo iniciado
+31/07/2025 15:16:41 - ERROR - Erro na conexão: ModbusSerialClient.__init__() got an unexpected keyword argument 'strict'
+01/08/2025 14:35:41 - INFO - Aplicativo iniciado
+01/08/2025 14:35:47 - ERROR - Erro na conexão: ModbusSerialClient.__init__() got an unexpected keyword argument 'strict'
